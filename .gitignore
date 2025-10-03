@@ -30,6 +30,7 @@ Thumbs.db
 # Env
 .env
 .env.*
+!.env.example
 
 # Misc
 .idea/

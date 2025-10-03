@@ -1,0 +1,9 @@
+{
+  "name": "car-connect",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@8.15.4",
+  "scripts": {
+    "postinstall": "pnpm install --recursive"
+  }
+}

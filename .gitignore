@@ -1,14 +1,36 @@
-node_modules
-dist
-.build
-.DS_Store
-.env
-.env.*
-.dart_tool
-.packages
-.pub-cache
-build
+# Node
+node_modules/
+dist/
+build/
+.pnp.*
+.pnpm-store/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# pnpm
+pnpm-debug.log*
+
+# Flutter
+**/build/
 .flutter-plugins
 .flutter-plugins-dependencies
-.idea
-.vscode
+.packages
+.pub-cache/
+.dart_tool/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+
+# Misc
+.idea/
+.vscode/

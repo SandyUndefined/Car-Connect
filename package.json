@@ -5,5 +5,10 @@
   "packageManager": "pnpm@8.15.4",
   "scripts": {
     "postinstall": "pnpm install --recursive"
+  },
+  "prettier": {
+    "singleQuote": false,
+    "semi": true,
+    "printWidth": 100
   }
 }

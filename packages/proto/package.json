@@ -1,0 +1,15 @@
+{
+  "name": "@proto/shared",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -w -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "echo 'no lint configured in proto yet'"
+  }
+}

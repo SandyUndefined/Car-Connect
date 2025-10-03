@@ -1,0 +1,21 @@
+services:
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+  # TURN server placeholder (configure later with secrets)
+  coturn:
+    image: instrumentisto/coturn
+    command: >
+      -n --log-file=stdout
+      --listening-port=3478
+      --fingerprint
+      --lt-cred-mech
+      --realm=example.com
+      --no-cli
+    environment:
+      - TURN_USERNAME=demo
+      - TURN_PASSWORD=demo
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"

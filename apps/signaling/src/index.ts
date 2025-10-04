@@ -18,6 +18,11 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
 app.get("/health", (_req, res) => res.status(StatusCodes.OK).json({ ok: true }));
+app.get("/metrics", async (_req, res) => {
+  const rooms = await redis.keys("room:*");
+  const sockets = io.of("/").sockets.size;
+  res.json({ rooms: rooms.length, sockets });
+});
 app.post("/turn-cred", getTurnCredentials);
 
 // Create room (host only, no auth required for first create)

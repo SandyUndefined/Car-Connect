@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'env.dart';
+import 'permissions.dart';
 import 'webrtc/signaling_client.dart';
 
 void main() {
@@ -48,8 +49,17 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 
   Future<void> _createRoom() async {
-    final client = ref.read(signalingClientProvider);
     final notifier = ref.read(lastMessageProvider.notifier);
+    final hasPermissions = await ensureAvPermissions();
+    if (!hasPermissions) {
+      const message = 'Camera and microphone permissions are required to create a room.';
+      notifier.state = message;
+      // ignore: avoid_print
+      print(message);
+      return;
+    }
+
+    final client = ref.read(signalingClientProvider);
     try {
       final response = await client.createRoom(_hostController.text);
       final message = 'Created room: ${jsonEncode(response)}';
@@ -68,8 +78,17 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 
   Future<void> _joinRoom() async {
-    final client = ref.read(signalingClientProvider);
     final notifier = ref.read(lastMessageProvider.notifier);
+    final hasPermissions = await ensureAvPermissions();
+    if (!hasPermissions) {
+      const message = 'Camera and microphone permissions are required to join a room.';
+      notifier.state = message;
+      // ignore: avoid_print
+      print(message);
+      return;
+    }
+
+    final client = ref.read(signalingClientProvider);
     try {
       final response = await client.joinRoom(_roomController.text);
       final message = 'Joined room: ${jsonEncode(response)}';

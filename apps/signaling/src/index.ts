@@ -1,11 +1,13 @@
 import "dotenv/config";
+import crypto from "crypto";
 import express from "express";
 import http from "http";
 import cors from "cors";
 import { Server } from "socket.io";
 import { StatusCodes } from "http-status-codes";
-import Redis from "ioredis";
-import jwt from "jsonwebtoken";
+import { requireBearer, signToken } from "./auth.js";
+import { redis, roomKey, membersKey, socketsKey } from "./redis.js";
+import type { Room } from "./models.js";
 import { getTurnCredentials } from "./turn.js";
 
 const app = express();
@@ -15,28 +17,49 @@ app.use(express.json());
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
-const redis = new Redis(process.env.REDIS_URL);
-
 app.get("/health", (_req, res) => res.status(StatusCodes.OK).json({ ok: true }));
 app.post("/turn-cred", getTurnCredentials);
 
-// (stub) Create room
-app.post("/v1/rooms", (req, res) => {
+// Create room (host only, no auth required for first create)
+app.post("/v1/rooms", async (req, res) => {
   const { hostId, mode } = req.body ?? {};
-  const id = "room_" + Math.random().toString(36).slice(2, 10);
-  const room = { id, hostId, mode: mode ?? "mesh", createdAt: new Date().toISOString() };
-  redis.set(`room:${id}`, JSON.stringify(room));
-  const token = jwt.sign({ roomId: id, role: "host" }, process.env.JWT_SECRET!, { expiresIn: "2h" });
+  if (!hostId) return res.status(StatusCodes.BAD_REQUEST).json({ error: "hostId required" });
+
+  const id = "room_" + crypto.randomBytes(3).toString("hex");
+  const room: Room = {
+    id,
+    hostId,
+    mode: mode === "sfu" ? "sfu" : "mesh",
+    createdAt: new Date().toISOString(),
+  };
+  await redis.set(roomKey(id), JSON.stringify(room));
+  await redis.del(membersKey(id));
+  await redis.del(socketsKey(id));
+
+  const token = signToken({ roomId: id, role: "host", userId: hostId }, "6h");
   res.json({ room, token });
 });
 
-// (stub) Join room
+// Join room (returns JWT)
 app.post("/v1/rooms/:id/join", async (req, res) => {
   const roomId = req.params.id;
-  const room = await redis.get(`room:${roomId}`);
-  if (!room) return res.status(StatusCodes.NOT_FOUND).json({ error: "room not found" });
-  const token = jwt.sign({ roomId, role: "participant" }, process.env.JWT_SECRET!, { expiresIn: "2h" });
+  const { userId } = req.body ?? {};
+  if (!userId) return res.status(StatusCodes.BAD_REQUEST).json({ error: "userId required" });
+
+  const raw = await redis.get(roomKey(roomId));
+  if (!raw) return res.status(StatusCodes.NOT_FOUND).json({ error: "room not found" });
+
+  const token = signToken({ roomId, role: "participant", userId }, "6h");
   res.json({ token });
+});
+
+// Protected: room details (debug)
+app.get("/v1/rooms/:id", requireBearer, async (req, res) => {
+  const roomId = req.params.id;
+  const raw = await redis.get(roomKey(roomId));
+  if (!raw) return res.status(StatusCodes.NOT_FOUND).json({ error: "room not found" });
+  const members = await redis.smembers(membersKey(roomId));
+  res.json({ room: JSON.parse(raw), members });
 });
 
 // Socket.IO signaling events

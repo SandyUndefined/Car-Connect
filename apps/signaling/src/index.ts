@@ -3,6 +3,8 @@ import crypto from "crypto";
 import express from "express";
 import http from "http";
 import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import { Server } from "socket.io";
 import { StatusCodes } from "http-status-codes";
 import { requireBearer, signToken } from "./auth.js";
@@ -11,11 +13,17 @@ import type { Room } from "./models.js";
 import { getTurnCredentials } from "./turn.js";
 
 const app = express();
+app.use(helmet());
+app.use(rateLimit({ windowMs: 60_000, max: 300 }));
 app.use(cors());
 app.use(express.json());
 
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
+io.engine.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  next();
+});
 
 app.get("/health", (_req, res) => res.status(StatusCodes.OK).json({ ok: true }));
 app.post("/turn-cred", getTurnCredentials);

@@ -3,19 +3,25 @@ services:
     image: redis:7
     ports:
       - "6379:6379"
-  # TURN server placeholder (configure later with secrets)
   coturn:
     image: instrumentisto/coturn
+    environment:
+      - REALM=example.com
+      - SHARED_SECRET=my-super-secret   # CHANGE IN PROD
     command: >
       -n --log-file=stdout
       --listening-port=3478
       --fingerprint
-      --lt-cred-mech
-      --realm=example.com
+      --use-auth-secret
+      --static-auth-secret=$(SHARED_SECRET)
+      --realm=$(REALM)
       --no-cli
-    environment:
-      - TURN_USERNAME=demo
-      - TURN_PASSWORD=demo
+      --no-tls
     ports:
       - "3478:3478/udp"
       - "3478:3478/tcp"
+
+# Notes:
+# - For public cloud, add: --external-ip=<PUBLIC_IP>
+# - For TLS TURN, add certs and remove --no-tls
+# - For prod, DO NOT commit the secret; inject via .env and docker compose env_file

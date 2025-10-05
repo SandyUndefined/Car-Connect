@@ -7,10 +7,20 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { Server } from "socket.io";
 import { StatusCodes } from "http-status-codes";
-import { getDefaultTokenTtl, requireBearer, signToken } from "./auth.js";
+import { requireBearer, requirePerm, signToken, verifyToken } from "./auth.js";
+import { ROLE_PERMS } from "./roles.js";
 import { redis, roomKey, membersKey, socketsKey } from "./redis.js";
 import type { Room } from "./models.js";
 import { getTurnCredentials } from "./turn.js";
+
+const RT_PREFIX = "rt:"; // refresh token key
+async function setRefreshToken(userId: string, token: string, ttlSec = 60 * 60 * 24 * 7) {
+  await redis.setex(RT_PREFIX + userId, ttlSec, token);
+}
+async function checkRefreshToken(userId: string, token: string) {
+  const v = await redis.get(RT_PREFIX + userId);
+  return v === token;
+}
 
 const app = express();
 app.use(helmet());
@@ -65,8 +75,12 @@ app.post("/v1/rooms", async (req, res) => {
   await redis.del(membersKey(id));
   await redis.del(socketsKey(id));
 
-  const token = signToken({ roomId: id, role: "host", userId: hostId, mode: room.mode });
-  res.json({ room, token, ttl: getDefaultTokenTtl() });
+  const perms = ROLE_PERMS.host;
+  const access = signToken({ sub: hostId, roomId: id, role: "host", perms }, "1h");
+  const refresh = crypto.randomBytes(24).toString("base64url");
+  await setRefreshToken(hostId, refresh);
+
+  res.json({ room, token: access, refresh });
 });
 
 // Join room (returns JWT)
@@ -78,13 +92,35 @@ app.post("/v1/rooms/:id/join", async (req, res) => {
   const raw = await redis.get(roomKey(roomId));
   if (!raw) return res.status(StatusCodes.NOT_FOUND).json({ error: "room not found" });
 
-  const room = JSON.parse(raw) as Room;
-  const token = signToken({ roomId, role: "participant", userId, mode: room.mode });
-  res.json({ token, ttl: getDefaultTokenTtl() });
+  const perms = ROLE_PERMS.participant;
+  const access = signToken({ sub: userId, roomId, role: "participant", perms }, "1h");
+  const refresh = crypto.randomBytes(24).toString("base64url");
+  await setRefreshToken(userId, refresh);
+
+  res.json({ token: access, refresh });
+});
+
+app.post("/auth/refresh", async (req, res) => {
+  const { userId, refresh } = req.body ?? {};
+  if (!userId || !refresh) return res.status(StatusCodes.BAD_REQUEST).json({ error: "missing fields" });
+
+  const ok = await checkRefreshToken(userId, refresh);
+  if (!ok) return res.status(StatusCodes.UNAUTHORIZED).json({ error: "invalid refresh" });
+
+  // Require client to send last access token (optional, for rotation)
+  // Recreate token with same role/perms by reading room membership
+  // Here, client must also send roomId.
+  const { roomId, role } = req.body ?? {};
+  if (!roomId || !role) return res.status(StatusCodes.BAD_REQUEST).json({ error: "missing room context" });
+
+  const perms = ROLE_PERMS[role as "host" | "participant"];
+  if (!perms) return res.status(StatusCodes.BAD_REQUEST).json({ error: "unknown role" });
+  const newAccess = signToken({ sub: userId, roomId, role, perms }, "1h");
+  res.json({ token: newAccess });
 });
 
 // Protected: room details (debug)
-app.get("/v1/rooms/:id", requireBearer, async (req, res) => {
+app.get("/v1/rooms/:id", requireBearer, requirePerm("room:read"), async (req, res) => {
   const roomId = req.params.id;
   const raw = await redis.get(roomKey(roomId));
   if (!raw) return res.status(StatusCodes.NOT_FOUND).json({ error: "room not found" });
@@ -98,8 +134,13 @@ io.use((socket, next) => {
   const token = socket.handshake.auth?.token as string | undefined;
   if (!token) return next(new Error("missing token"));
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET!) as any;
-    (socket as any).auth = payload; // { roomId, role, userId }
+    const payload = verifyToken<{
+      roomId: string;
+      role: "host" | "participant";
+      sub: string;
+      perms?: string[];
+    }>(token);
+    (socket as any).auth = payload; // { roomId, role, sub }
     return next();
   } catch {
     return next(new Error("invalid token"));
@@ -107,7 +148,7 @@ io.use((socket, next) => {
 });
 
 io.on("connection", async (socket) => {
-  const { roomId, userId } = (socket as any).auth || {};
+  const { roomId, sub: userId } = (socket as any).auth || {};
   if (!roomId || !userId) {
     socket.disconnect(true);
     return;

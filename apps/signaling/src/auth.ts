@@ -1,4 +1,3 @@
-import jwt from "jsonwebtoken";
 import { Request, Response, NextFunction } from "express";
 import { ROLE_PERMS, Perm, Role, hasPerm } from "./roles.js";
 

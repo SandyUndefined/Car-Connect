@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../room/room_controller.dart';
+import '../room/sfu_controller.dart';
 
 class CallScreen extends ConsumerWidget {
   const CallScreen({super.key});
@@ -9,6 +10,7 @@ class CallScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final st = ref.watch(roomControllerProvider);
+    final sfuPeers = ref.watch(sfuControllerProvider);
     final ctrl = ref.read(roomControllerProvider.notifier);
 
     final tiles = <Widget>[];
@@ -17,14 +19,18 @@ class CallScreen extends ConsumerWidget {
         label: "You",
         renderer: st.localRenderer!,
         mirror: true,
-        stats: st.stats['local'],
       ));
     }
     for (final p in st.peers) {
       tiles.add(_VideoTile(
         label: p.userId,
         renderer: p.renderer,
-        stats: st.stats[p.userId],
+      ));
+    }
+    for (final v in sfuPeers) {
+      tiles.add(_VideoTile(
+        label: v.userId,
+        renderer: v.renderer,
       ));
     }
 
@@ -51,7 +57,10 @@ class CallScreen extends ConsumerWidget {
                   onPressed: ctrl.toggleCam,
                 ),
                 ElevatedButton.icon(
-                  onPressed: ctrl.leave,
+                  onPressed: () async {
+                    await ref.read(sfuControllerProvider.notifier).stop();
+                    await ctrl.leave();
+                  },
                   icon: const Icon(Icons.call_end),
                   label: const Text("End"),
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.red),

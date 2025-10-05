@@ -1,184 +1,57 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
-import 'env.dart';
-import 'permissions.dart';
-import 'webrtc/signaling_client.dart';
+import 'ui/call_screen.dart';
+import 'room/room_controller.dart';
 
 void main() {
-  runApp(const ProviderScope(child: MyApp()));
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const ProviderScope(child: App()));
 }
 
-final signalingClientProvider = Provider<SignalingClient>((ref) {
-  return SignalingClient(Env.signalingBase);
-});
-
-final lastMessageProvider = StateProvider<String?>((ref) => null);
-
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
+class App extends StatelessWidget {
+  const App({super.key});
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Car Connect',
-      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue), useMaterial3: true),
-      home: const HomePage(),
+      title: 'RTC Mesh Demo',
+      theme: ThemeData(colorSchemeSeed: Colors.blue, useMaterial3: true),
+      home: const Home(),
     );
   }
 }
 
-class HomePage extends ConsumerStatefulWidget {
-  const HomePage({super.key});
-
+class Home extends ConsumerWidget {
+  const Home({super.key});
   @override
-  ConsumerState<HomePage> createState() => _HomePageState();
-}
-
-class _HomePageState extends ConsumerState<HomePage> {
-  final TextEditingController _hostController = TextEditingController(text: 'host-1');
-  final TextEditingController _roomController = TextEditingController();
-
-  @override
-  void dispose() {
-    _hostController.dispose();
-    _roomController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _createRoom() async {
-    final notifier = ref.read(lastMessageProvider.notifier);
-    final hasPermissions = await ensureAvPermissions();
-    if (!hasPermissions) {
-      const message = 'Camera and microphone permissions are required to create a room.';
-      notifier.state = message;
-      // ignore: avoid_print
-      print(message);
-      return;
-    }
-
-    final client = ref.read(signalingClientProvider);
-    try {
-      final response = await client.createRoom(_hostController.text);
-      final message = 'Created room: ${jsonEncode(response)}';
-      notifier.state = message;
-      // ignore: avoid_print
-      print(message);
-      _roomController.text = response['id']?.toString() ?? _roomController.text;
-    } catch (error, stackTrace) {
-      final message = 'Failed to create room: $error';
-      notifier.state = message;
-      // ignore: avoid_print
-      print(message);
-      // ignore: avoid_print
-      print(stackTrace);
-    }
-  }
-
-  Future<void> _joinRoom() async {
-    final notifier = ref.read(lastMessageProvider.notifier);
-    final hasPermissions = await ensureAvPermissions();
-    if (!hasPermissions) {
-      const message = 'Camera and microphone permissions are required to join a room.';
-      notifier.state = message;
-      // ignore: avoid_print
-      print(message);
-      return;
-    }
-
-    final client = ref.read(signalingClientProvider);
-    try {
-      final response = await client.joinRoom(_roomController.text);
-      final message = 'Joined room: ${jsonEncode(response)}';
-      notifier.state = message;
-      // ignore: avoid_print
-      print(message);
-    } catch (error, stackTrace) {
-      final message = 'Failed to join room: $error';
-      notifier.state = message;
-      // ignore: avoid_print
-      print(message);
-      // ignore: avoid_print
-      print(stackTrace);
-    }
-  }
-
-  Future<void> _fetchTurnCredentials() async {
-    final client = ref.read(signalingClientProvider);
-    final notifier = ref.read(lastMessageProvider.notifier);
-    try {
-      final response = await client.turnCred();
-      final message = 'Fetched TURN credentials: ${jsonEncode(response)}';
-      notifier.state = message;
-      // ignore: avoid_print
-      print(message);
-    } catch (error, stackTrace) {
-      final message = 'Failed to fetch TURN credentials: $error';
-      notifier.state = message;
-      // ignore: avoid_print
-      print(message);
-      // ignore: avoid_print
-      print(stackTrace);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final lastMessage = ref.watch(lastMessageProvider);
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ctrl = ref.read(roomControllerProvider.notifier);
+    final idCtrl = TextEditingController();
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Car Connect Signaling'),
-      ),
+      appBar: AppBar(title: const Text('Home')),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.start,
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            TextField(
-              controller: _hostController,
-              decoration: const InputDecoration(labelText: 'Host ID'),
+            ElevatedButton(
+              onPressed: () async {
+                await ctrl.createRoom();
+                if (context.mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => const CallScreen()));
+              },
+              child: const Text('Create Room'),
             ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _createRoom,
-                    child: const Text('Create Room'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _fetchTurnCredentials,
-                    child: const Text('Get TURN Creds'),
-                  ),
-                ),
-              ],
+            TextField(controller: idCtrl, decoration: const InputDecoration(labelText: 'Room ID')),
+            const SizedBox(height: 8),
+            ElevatedButton(
+              onPressed: () async {
+                final roomId = idCtrl.text.trim();
+                if (roomId.isEmpty) return;
+                await ctrl.joinRoom(roomId);
+                if (context.mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => const CallScreen()));
+              },
+              child: const Text('Join Room'),
             ),
-            const SizedBox(height: 24),
-            TextField(
-              controller: _roomController,
-              decoration: const InputDecoration(labelText: 'Room ID'),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _joinRoom,
-                child: const Text('Join Room'),
-              ),
-            ),
-            const SizedBox(height: 24),
-            if (lastMessage != null) ...[
-              const Text('Last message:'),
-              const SizedBox(height: 8),
-              Text(lastMessage),
-            ],
           ],
         ),
       ),

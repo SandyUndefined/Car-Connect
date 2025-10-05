@@ -8,6 +8,7 @@ import '../webrtc/signaling_socket.dart';
 import '../webrtc/rtc_manager.dart';
 import '../webrtc/peer.dart';
 import '../env.dart';
+import 'sfu_controller.dart';
 
 final roomControllerProvider = NotifierProvider<RoomController, RoomState>(RoomController.new);
 
@@ -114,6 +115,18 @@ class RoomController extends Notifier<RoomState> {
       onVideoToggle: (_) {},
       onAudioLevel: (_) {},
     );
+
+    _sock!.onRoomMode((data) async {
+      final mode = data['mode'] as String?;
+      if (mode == 'sfu') {
+        final token = state.token;
+        await leave(preserveState: true, preserveLocalMedia: true);
+        if (token != null) {
+          final sfuCtrl = ref.read(sfuControllerProvider.notifier);
+          await sfuCtrl.start(token);
+        }
+      }
+    });
 
     // For mesh: we will create pc per remote when we see participantJoined or when we want to call everyone.
     // Act as polite peer: wait for remote offer if they initiate; otherwise create offer to new remote.
@@ -436,14 +449,27 @@ class RoomController extends Notifier<RoomState> {
     state = state.copyWith(camOn: enabled);
   }
 
-  Future<void> leave() async {
+  Future<void> leave({bool preserveState = false, bool preserveLocalMedia = false}) async {
     _sock?.leaveRoom();
     for (final p in state.peers) { await p.dispose(); }
-    await _rtc.dispose();
     _sock?.dispose();
+    _sock = null;
     _statsTimer?.cancel();
+    _statsTimer = null;
     _previousBitrates.clear();
-    state = RoomState();
+    if (!preserveLocalMedia) {
+      await _rtc.dispose();
+      await state.localRenderer?.dispose();
+    }
+    if (preserveState) {
+      state = state.copyWith(
+        peers: const <Peer>[],
+        stats: const <String, CallStats>{},
+        localRenderer: preserveLocalMedia ? state.localRenderer : null,
+      );
+    } else {
+      state = RoomState();
+    }
   }
 
   void _clearSnapshotsForPeer(String socketId) {

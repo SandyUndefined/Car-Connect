@@ -7,6 +7,7 @@
     "build": "pnpm -r build",
     "dev": "pnpm -r --parallel dev",
     "dev:stack": "docker compose -f infra/docker-compose.yml up --remove-orphans",
+    "dev:sfu": "pnpm --filter @apps/sfu dev",
     "dev:signaling": "pnpm --filter @apps/signaling dev",
     "dev:admin": "pnpm --filter admin dev",
     "typecheck": "pnpm -r typecheck",

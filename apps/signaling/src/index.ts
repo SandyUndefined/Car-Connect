@@ -7,7 +7,13 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { Server } from "socket.io";
 import { StatusCodes } from "http-status-codes";
-import { getDefaultTokenTtl, requireBearer, signToken } from "./auth.js";
+import {
+  getDefaultTokenTtl,
+  requireBearer,
+  requirePerm,
+  signToken,
+  verifyToken,
+} from "./auth.js";
 import { redis, roomKey, membersKey, socketsKey } from "./redis.js";
 import type { Room } from "./models.js";
 import { getTurnCredentials } from "./turn.js";
@@ -24,6 +30,16 @@ io.engine.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   next();
 });
+
+const HOST_PERMS = [
+  "room:read",
+  "room:lock",
+  "room:muteAll",
+  "room:remove",
+  "signal:send",
+];
+
+const PARTICIPANT_PERMS = ["signal:send"];
 
 const ensureRoomMode = async (roomId: string) => {
   const [memberCount, roomRaw] = await Promise.all([
@@ -65,7 +81,13 @@ app.post("/v1/rooms", async (req, res) => {
   await redis.del(membersKey(id));
   await redis.del(socketsKey(id));
 
-  const token = signToken({ roomId: id, role: "host", userId: hostId, mode: room.mode });
+  const token = signToken({
+    roomId: id,
+    role: "host",
+    userId: hostId,
+    mode: room.mode,
+    perms: HOST_PERMS,
+  });
   res.json({ room, token, ttl: getDefaultTokenTtl() });
 });
 
@@ -79,12 +101,18 @@ app.post("/v1/rooms/:id/join", async (req, res) => {
   if (!raw) return res.status(StatusCodes.NOT_FOUND).json({ error: "room not found" });
 
   const room = JSON.parse(raw) as Room;
-  const token = signToken({ roomId, role: "participant", userId, mode: room.mode });
+  const token = signToken({
+    roomId,
+    role: "participant",
+    userId,
+    mode: room.mode,
+    perms: PARTICIPANT_PERMS,
+  });
   res.json({ token, ttl: getDefaultTokenTtl() });
 });
 
 // Protected: room details (debug)
-app.get("/v1/rooms/:id", requireBearer, async (req, res) => {
+app.get("/v1/rooms/:id", requireBearer, requirePerm("room:read"), async (req, res) => {
   const roomId = req.params.id;
   const raw = await redis.get(roomKey(roomId));
   if (!raw) return res.status(StatusCodes.NOT_FOUND).json({ error: "room not found" });
@@ -92,22 +120,67 @@ app.get("/v1/rooms/:id", requireBearer, async (req, res) => {
   res.json({ room: JSON.parse(raw), members });
 });
 
+app.post("/v1/rooms/:id/lock", requireBearer, requirePerm("room:lock"), async (req, res) => {
+  const roomId = req.params.id;
+  const raw = await redis.get(roomKey(roomId));
+  if (!raw) return res.status(StatusCodes.NOT_FOUND).json({ error: "room not found" });
+  const room = JSON.parse(raw) as Room;
+  room.locked = true;
+  await redis.set(roomKey(roomId), JSON.stringify(room));
+  io.to(roomId).emit("roomLocked", { locked: true });
+  res.json({ ok: true });
+});
+
+app.post("/v1/rooms/:id/unlock", requireBearer, requirePerm("room:lock"), async (req, res) => {
+  const roomId = req.params.id;
+  const raw = await redis.get(roomKey(roomId));
+  if (!raw) return res.status(StatusCodes.NOT_FOUND).json({ error: "room not found" });
+  const room = JSON.parse(raw) as Room;
+  room.locked = false;
+  await redis.set(roomKey(roomId), JSON.stringify(room));
+  io.to(roomId).emit("roomLocked", { locked: false });
+  res.json({ ok: true });
+});
+
+app.post("/v1/rooms/:id/muteAll", requireBearer, requirePerm("room:muteAll"), async (req, res) => {
+  const roomId = req.params.id;
+  io.to(roomId).emit("muteAll", {});
+  res.json({ ok: true });
+});
+
+app.post("/v1/rooms/:id/remove", requireBearer, requirePerm("room:remove"), async (req, res) => {
+  const roomId = req.params.id;
+  const { targetUserId } = req.body ?? {};
+  if (!targetUserId)
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: "targetUserId required" });
+
+  const map = await redis.hgetall(socketsKey(roomId));
+  const entries = Object.entries(map ?? {});
+  const targets = entries
+    .filter(([, uid]) => uid === targetUserId)
+    .map(([sid]) => sid);
+  targets.forEach((sid) => io.sockets.sockets.get(sid)?.emit("removedByHost", { reason: "removed" }));
+
+  res.json({ ok: true, count: targets.length });
+});
+
 // Socket.IO signaling events
 io.use((socket, next) => {
-  // Expect: { token } from client in connection auth
-  const token = socket.handshake.auth?.token as string | undefined;
-  if (!token) return next(new Error("missing token"));
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET!) as any;
-    (socket as any).auth = payload; // { roomId, role, userId }
-    return next();
+    const token = socket.handshake.auth?.token as string | undefined;
+    if (!token) return next(new Error("missing token"));
+    const payload = verifyToken(token) as any;
+    (socket as any).auth = payload;
+    next();
   } catch {
-    return next(new Error("invalid token"));
+    next(new Error("invalid token"));
   }
 });
 
 io.on("connection", async (socket) => {
-  const { roomId, userId } = (socket as any).auth || {};
+  const auth = (socket as any).auth || {};
+  const roomId = auth.roomId;
+  const userId = auth.sub ?? auth.userId;
   if (!roomId || !userId) {
     socket.disconnect(true);
     return;
@@ -131,6 +204,8 @@ io.on("connection", async (socket) => {
   // WebRTC signaling pass-through
   // payload: { toSocketId?: string, data: any }
   socket.on("signal", ({ toSocketId, data }) => {
+    const a = (socket as any).auth;
+    if (!a?.perms?.includes("signal:send")) return;
     if (toSocketId) {
       io.to(toSocketId).emit("signal", { fromSocketId: socket.id, fromUserId: userId, data });
     } else {

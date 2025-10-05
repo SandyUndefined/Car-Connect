@@ -5,13 +5,20 @@ export interface AuthPayload {
   roomId?: string;
   role?: "host" | "participant";
   userId?: string;
+  sub?: string;
+  perms?: string[];
+  mode?: string;
 }
 
 const DEFAULT_TOKEN_TTL =
   process.env.JWT_TTL || (process.env.NODE_ENV === "production" ? "5m" : "12h");
 
 export function signToken(payload: AuthPayload, ttl = DEFAULT_TOKEN_TTL) {
-  return jwt.sign(payload, process.env.JWT_SECRET!, { expiresIn: ttl });
+  const normalized: AuthPayload = {
+    ...payload,
+    sub: payload.sub ?? payload.userId,
+  };
+  return jwt.sign(normalized, process.env.JWT_SECRET!, { expiresIn: ttl });
 }
 
 export function getDefaultTokenTtl() {
@@ -32,4 +39,14 @@ export function requireBearer(req: Request, res: Response, next: NextFunction) {
   } catch {
     return res.status(401).json({ error: "invalid token" });
   }
+}
+
+export function requirePerm(perm: string) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const auth = (req as any).auth as AuthPayload | undefined;
+    if (!auth?.perms?.includes(perm)) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    next();
+  };
 }

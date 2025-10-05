@@ -21,7 +21,23 @@ services:
       - "3478:3478/udp"
       - "3478:3478/tcp"
 
+  sfu:
+    build:
+      context: ../apps/sfu
+    environment:
+      - PORT=9090
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=change_me
+      - ANNOUNCED_IP=127.0.0.1
+    ports:
+      - "9090:9090"
+      - "40000-49999:40000-49999/udp"
+    depends_on:
+      - redis
+
 # Notes:
+# - If you don't build with Docker yet, run the SFU app locally with pnpm
+# - For public cloud, set ANNOUNCED_IP to the machine's public IP
 # - For public cloud, add: --external-ip=<PUBLIC_IP>
 # - For TLS TURN, add certs and remove --no-tls
 # - For prod, DO NOT commit the secret; inject via .env and docker compose env_file

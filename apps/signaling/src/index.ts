@@ -1,7 +1,9 @@
 import "dotenv/config";
 import crypto from "crypto";
 import express from "express";
+import fs from "fs";
 import http from "http";
+import https from "https";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
@@ -28,7 +30,17 @@ app.use(rateLimit({ windowMs: 60_000, max: 300 }));
 app.use(cors());
 app.use(express.json());
 
-const server = http.createServer(app);
+const enableTls = (process.env.ENABLE_TLS || "false") === "true";
+let server: http.Server | https.Server;
+if (enableTls) {
+  const key = fs.readFileSync(process.env.TLS_KEY_PATH!);
+  const cert = fs.readFileSync(process.env.TLS_CERT_PATH!);
+  server = https.createServer({ key, cert }, app);
+} else {
+  server = http.createServer(app);
+}
+
+// TIP: In production prefer terminating TLS at an edge proxy and only allow WSS traffic upstream.
 const io = new Server(server, { cors: { origin: "*" } });
 io.engine.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");

@@ -25,6 +25,22 @@ io.engine.use((req, res, next) => {
   next();
 });
 
+const ensureRoomMode = async (roomId: string) => {
+  const [memberCount, roomRaw] = await Promise.all([
+    redis.scard(membersKey(roomId)),
+    redis.get(roomKey(roomId)),
+  ]);
+
+  if (!roomRaw) return;
+
+  const room = JSON.parse(roomRaw) as Room;
+  if (memberCount >= 5 && room.mode !== "sfu") {
+    const updatedRoom: Room = { ...room, mode: "sfu" };
+    await redis.set(roomKey(roomId), JSON.stringify(updatedRoom));
+    io.to(roomId).emit("roomMode", { mode: "sfu" });
+  }
+};
+
 app.get("/health", (_req, res) => res.status(StatusCodes.OK).json({ ok: true }));
 app.get("/metrics", async (_req, res) => {
   const rooms = await redis.keys("room:*");
@@ -89,7 +105,7 @@ io.use((socket, next) => {
   }
 });
 
-io.on("connection", (socket) => {
+io.on("connection", async (socket) => {
   const { roomId, userId } = (socket as any).auth || {};
   if (!roomId || !userId) {
     socket.disconnect(true);
@@ -100,11 +116,13 @@ io.on("connection", (socket) => {
   socket.join(roomId);
 
   // Track presence
-  redis.sadd(membersKey(roomId), userId);
-  redis.hset(socketsKey(roomId), socket.id, userId);
+  await redis.sadd(membersKey(roomId), userId);
+  await redis.hset(socketsKey(roomId), socket.id, userId);
 
   // Notify others
   socket.to(roomId).emit("participantJoined", { userId, socketId: socket.id });
+
+  await ensureRoomMode(roomId);
 
   // Heartbeat (optional)
   socket.on("ping", () => socket.emit("pong", { t: Date.now() }));
@@ -143,6 +161,7 @@ io.on("connection", (socket) => {
     const userStillPresent = (await redis.hvals(socketsKey(roomId))).includes(userId);
     if (!userStillPresent) {
       await redis.srem(membersKey(roomId), userId);
+      await ensureRoomMode(roomId);
     }
   });
 
@@ -152,6 +171,7 @@ io.on("connection", (socket) => {
     const userStillPresent = (await redis.hvals(socketsKey(roomId))).includes(userId);
     if (!userStillPresent) {
       await redis.srem(membersKey(roomId), userId);
+      await ensureRoomMode(roomId);
     }
   });
 });

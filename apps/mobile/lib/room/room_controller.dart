@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -17,6 +18,7 @@ class RoomState {
   final bool camOn;
   final List<Peer> peers; // remote peers
   final RTCVideoRenderer? localRenderer;
+  final Map<String, CallStats> stats;
 
   RoomState({
     this.roomId,
@@ -25,6 +27,7 @@ class RoomState {
     this.camOn = true,
     this.peers = const [],
     this.localRenderer,
+    this.stats = const {},
   });
 
   RoomState copyWith({
@@ -34,6 +37,7 @@ class RoomState {
     bool? camOn,
     List<Peer>? peers,
     RTCVideoRenderer? localRenderer,
+    Map<String, CallStats>? stats,
   }) => RoomState(
         roomId: roomId ?? this.roomId,
         token: token ?? this.token,
@@ -41,7 +45,22 @@ class RoomState {
         camOn: camOn ?? this.camOn,
         peers: peers ?? this.peers,
         localRenderer: localRenderer ?? this.localRenderer,
+        stats: stats ?? this.stats,
       );
+}
+
+class CallStats {
+  final double? outboundKbps;
+  final double? inboundKbps;
+  final double? rttMs;
+  final double? packetLossPercent;
+
+  const CallStats({
+    this.outboundKbps,
+    this.inboundKbps,
+    this.rttMs,
+    this.packetLossPercent,
+  });
 }
 
 class RoomController extends Notifier<RoomState> {
@@ -49,6 +68,9 @@ class RoomController extends Notifier<RoomState> {
   SignalingSocket? _sock;
   final RtcManager _rtc = RtcManager();
   final String _selfId = const Uuid().v4(); // userId
+  Timer? _statsTimer;
+  bool _collectingStats = false;
+  final Map<String, _BitrateSnapshot> _previousBitrates = {};
 
   @override
   RoomState build() {
@@ -95,6 +117,7 @@ class RoomController extends Notifier<RoomState> {
 
     // For mesh: we will create pc per remote when we see participantJoined or when we want to call everyone.
     // Act as polite peer: wait for remote offer if they initiate; otherwise create offer to new remote.
+    _startStatsTimer();
   }
 
   Future<Peer> _createPeer(String remoteUserId, String remoteSocketId, List<Map<String, dynamic>> ice) async {
@@ -134,6 +157,208 @@ class RoomController extends Notifier<RoomState> {
     return peer;
   }
 
+  void _startStatsTimer() {
+    _statsTimer?.cancel();
+    _statsTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _collectStats();
+    });
+    _collectStats();
+  }
+
+  Future<void> _collectStats() async {
+    if (_collectingStats) return;
+    _collectingStats = true;
+    try {
+      final Map<String, CallStats> peerStats = {};
+      double? localOutboundSum;
+      double? localInboundSum;
+      final List<double> localRtts = [];
+      final List<double> localLosses = [];
+
+      for (final peer in state.peers) {
+        final stats = await _statsForPeer(peer);
+        if (stats == null) continue;
+        peerStats[peer.userId] = stats;
+        if (stats.outboundKbps != null) {
+          localOutboundSum = (localOutboundSum ?? 0) + stats.outboundKbps!;
+        }
+        if (stats.inboundKbps != null) {
+          localInboundSum = (localInboundSum ?? 0) + stats.inboundKbps!;
+        }
+        if (stats.rttMs != null) {
+          localRtts.add(stats.rttMs!);
+        }
+        if (stats.packetLossPercent != null) {
+          localLosses.add(stats.packetLossPercent!);
+        }
+      }
+
+      if (localOutboundSum != null ||
+          localInboundSum != null ||
+          localRtts.isNotEmpty ||
+          localLosses.isNotEmpty) {
+        peerStats['local'] = CallStats(
+          outboundKbps: localOutboundSum,
+          inboundKbps: localInboundSum,
+          rttMs: localRtts.isNotEmpty ? localRtts.reduce((a, b) => a + b) / localRtts.length : null,
+          packetLossPercent: localLosses.isNotEmpty ? localLosses.reduce((a, b) => a + b) / localLosses.length : null,
+        );
+      }
+
+      if (!_mapsEqual(state.stats, peerStats)) {
+        state = state.copyWith(stats: Map.unmodifiable(peerStats));
+      }
+    } finally {
+      _collectingStats = false;
+    }
+  }
+
+  Future<CallStats?> _statsForPeer(Peer peer) async {
+    try {
+      final reports = await peer.pc.getStats();
+      double? outboundTotal;
+      double? inboundTotal;
+      final List<double> rttValues = [];
+      final List<double> lossValues = [];
+
+      for (final report in reports) {
+        switch (report.type) {
+          case 'outbound-rtp':
+            final bitrate = _bitrateForReport(peer.socketId, report, 'bytesSent');
+            if (bitrate != null) {
+              outboundTotal = (outboundTotal ?? 0) + bitrate;
+            }
+            break;
+          case 'inbound-rtp':
+            final bitrate = _bitrateForReport(peer.socketId, report, 'bytesReceived');
+            if (bitrate != null) {
+              inboundTotal = (inboundTotal ?? 0) + bitrate;
+            }
+            final loss = _lossForReport(report);
+            if (loss != null) {
+              lossValues.add(loss);
+            }
+            break;
+          case 'candidate-pair':
+            final rtt = _rttForReport(report);
+            if (rtt != null) {
+              rttValues.add(rtt);
+            }
+            break;
+          case 'remote-inbound-rtp':
+            final rtt = _rttFromRemoteInbound(report);
+            if (rtt != null) {
+              rttValues.add(rtt);
+            }
+            final loss = _lossForRemoteInbound(report);
+            if (loss != null) {
+              lossValues.add(loss);
+            }
+            break;
+        }
+      }
+
+      if (outboundTotal == null && inboundTotal == null && rttValues.isEmpty && lossValues.isEmpty) {
+        return null;
+      }
+
+      return CallStats(
+        outboundKbps: outboundTotal,
+        inboundKbps: inboundTotal,
+        rttMs: rttValues.isNotEmpty ? rttValues.reduce((a, b) => a + b) / rttValues.length : null,
+        packetLossPercent: lossValues.isNotEmpty ? lossValues.reduce((a, b) => a + b) / lossValues.length : null,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  double? _bitrateForReport(String socketId, RTCStatsReport report, String bytesKey) {
+    final bytes = _numFromDynamic(report.values[bytesKey]);
+    final timestamp = _timestampFromReport(report);
+    if (bytes == null || timestamp == null) return null;
+    final key = '$socketId:${report.id}:$bytesKey';
+    final snapshot = _previousBitrates[key];
+    _previousBitrates[key] = _BitrateSnapshot(bytes, timestamp);
+    if (snapshot == null) return null;
+    final deltaBytes = bytes - snapshot.bytes;
+    final deltaTimeMs = timestamp - snapshot.timestamp;
+    if (deltaBytes <= 0 || deltaTimeMs <= 0) return null;
+    final bitsPerSecond = (deltaBytes * 8 * 1000) / deltaTimeMs;
+    return bitsPerSecond / 1000; // kbps
+  }
+
+  double? _rttForReport(RTCStatsReport report) {
+    final stateValue = report.values['state'];
+    if (stateValue != 'succeeded') return null;
+    final rttSeconds = _numFromDynamic(report.values['currentRoundTripTime']);
+    if (rttSeconds == null) return null;
+    return rttSeconds * 1000;
+  }
+
+  double? _rttFromRemoteInbound(RTCStatsReport report) {
+    final rttSeconds = _numFromDynamic(report.values['roundTripTime']);
+    if (rttSeconds == null) return null;
+    return rttSeconds * 1000;
+  }
+
+  double? _lossForReport(RTCStatsReport report) {
+    final lost = _numFromDynamic(report.values['packetsLost']);
+    final received = _numFromDynamic(report.values['packetsReceived']);
+    if (lost == null || received == null) return null;
+    final total = lost + received;
+    if (total <= 0) return null;
+    return (lost / total) * 100;
+  }
+
+  double? _lossForRemoteInbound(RTCStatsReport report) {
+    final lost = _numFromDynamic(report.values['packetsLost']);
+    final sent = _numFromDynamic(report.values['packetsSent']);
+    if (lost == null || sent == null) return null;
+    final total = lost + sent;
+    if (total <= 0) return null;
+    return (lost / total) * 100;
+  }
+
+  double? _timestampFromReport(RTCStatsReport report) {
+    final timestamp = report.timestamp;
+    if (timestamp is num) {
+      return timestamp.toDouble();
+    }
+    if (timestamp is String) {
+      return double.tryParse(timestamp);
+    }
+    return null;
+  }
+
+  double? _numFromDynamic(dynamic value) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value);
+    return null;
+  }
+
+  bool _mapsEqual(Map<String, CallStats> a, Map<String, CallStats> b) {
+    if (a.length != b.length) return false;
+    for (final entry in a.entries) {
+      final other = b[entry.key];
+      if (other == null) return false;
+      if (!_statsEqual(entry.value, other)) return false;
+    }
+    return true;
+  }
+
+  bool _statsEqual(CallStats a, CallStats b) {
+    return _closeTo(a.outboundKbps, b.outboundKbps) &&
+        _closeTo(a.inboundKbps, b.inboundKbps) &&
+        _closeTo(a.rttMs, b.rttMs) &&
+        _closeTo(a.packetLossPercent, b.packetLossPercent);
+  }
+
+  bool _closeTo(double? a, double? b) {
+    if (a == null || b == null) return a == b;
+    return (a - b).abs() < 0.01;
+  }
+
   Future<void> _onJoined(Map<String, dynamic> data) async {
     // someone else joined the room; we (existing) initiate offer
     final remoteUserId = data['userId'] as String;
@@ -160,6 +385,7 @@ class RoomController extends Notifier<RoomState> {
     if (peer != null) {
       await peer.dispose();
       state = state.copyWith(peers: state.peers.where((p) => p.socketId != socketId).toList());
+      _clearSnapshotsForPeer(socketId);
     }
   }
 
@@ -215,6 +441,26 @@ class RoomController extends Notifier<RoomState> {
     for (final p in state.peers) { await p.dispose(); }
     await _rtc.dispose();
     _sock?.dispose();
+    _statsTimer?.cancel();
+    _previousBitrates.clear();
     state = RoomState();
   }
+
+  void _clearSnapshotsForPeer(String socketId) {
+    _previousBitrates.removeWhere((key, _) => key.startsWith('$socketId:'));
+  }
+
+  @override
+  void dispose() {
+    _statsTimer?.cancel();
+    super.dispose();
+  }
+}
+
+class _BitrateSnapshot {
+  final double bytes;
+  final double timestamp;
+  _BitrateSnapshot(num bytes, double timestamp)
+      : bytes = bytes.toDouble(),
+        timestamp = timestamp;
 }

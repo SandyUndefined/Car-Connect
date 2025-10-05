@@ -1,10 +1,11 @@
-import jwt from "jsonwebtoken";
 import { Request, Response, NextFunction } from "express";
+import jwt from "jsonwebtoken";
 
 export interface AuthPayload {
-  roomId?: string;
-  role?: "host" | "participant";
-  userId?: string;
+  roomId: string;
+  role: "host" | "participant";
+  sub: string;
+  perms?: string[];
 }
 
 const DEFAULT_TOKEN_TTL =
@@ -12,10 +13,6 @@ const DEFAULT_TOKEN_TTL =
 
 export function signToken(payload: AuthPayload, ttl = DEFAULT_TOKEN_TTL) {
   return jwt.sign(payload, process.env.JWT_SECRET!, { expiresIn: ttl });
-}
-
-export function getDefaultTokenTtl() {
-  return DEFAULT_TOKEN_TTL;
 }
 
 export function verifyToken<T = AuthPayload>(token: string): T {
@@ -32,4 +29,14 @@ export function requireBearer(req: Request, res: Response, next: NextFunction) {
   } catch {
     return res.status(401).json({ error: "invalid token" });
   }
+}
+
+export function requirePerm(perm: string) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const auth = (req as any).auth as AuthPayload | undefined;
+    if (!auth?.perms || !auth.perms.includes(perm)) {
+      return res.status(403).json({ error: "missing permission" });
+    }
+    next();
+  };
 }

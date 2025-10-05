@@ -31,3 +31,10 @@ This document captures the test scenario requested for verifying the mesh-to-SFU
 - If the autoswitch threshold is incorrect, adjust the configured limit accordingly.
 
 > **Note:** The above steps were not executed in this environment because Docker and Flutter tooling are not available in the container. Follow the procedure on a local machine or CI environment where the required dependencies exist.
+
+## 2025-02-18 Environment Check
+
+- Attempting to start the stack with `docker compose -f infra/docker-compose.yml up redis coturn` fails because Docker is not installed in the execution environment.
+- Running `pnpm --filter @apps/signaling dev` cannot complete because the container lacks outbound network access to download the pinned pnpm release via Corepack.
+- Due to the missing services, subsequent API verification steps (room locking, mute-all, host removal, token refresh over HTTP/HTTPS) could not be exercised here.
+- Re-run the scenario on a workstation or CI runner that has Docker available and unrestricted access to the npm registry.

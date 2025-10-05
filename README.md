@@ -63,3 +63,4 @@ flutter run -d <your_device>  # ensure signalingBase points to your machine IP
 - **Mediasoup scaling:** The SFU currently runs with a single mediasoup worker; plan to spawn one worker per CPU core and route rooms to workers when scaling horizontally.
 - **TURN usage:** Keep coturn online even with the SFU in place—publishers behind restrictive NAT or firewall rules still need relayed candidates to reach the SFU.
 - **Media extensions:** Treat call recording, PSTN dial-out, or SIP bridging as their own microservices that attach to the signaling layer instead of bolting them onto the SFU process.
+- **Privacy:** We do not store audio/video. Call logs keep roomId, timestamps, QoS only.

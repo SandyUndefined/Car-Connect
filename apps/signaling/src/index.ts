@@ -8,10 +8,12 @@ import rateLimit from "express-rate-limit";
 import { Server } from "socket.io";
 import { StatusCodes } from "http-status-codes";
 import { requireBearer, requirePerm, signToken, verifyToken } from "./auth.js";
+import type { AuthPayload } from "./auth.js";
 import { ROLE_PERMS } from "./roles.js";
 import { redis, roomKey, membersKey, socketsKey } from "./redis.js";
 import type { Room } from "./models.js";
 import { getTurnCredentials } from "./turn.js";
+import { audit } from "./audit.js";
 
 const RT_PREFIX = "rt:"; // refresh token key
 async function setRefreshToken(userId: string, token: string, ttlSec = 60 * 60 * 24 * 7) {
@@ -107,6 +109,8 @@ app.post("/v1/rooms/:id/join", async (req, res) => {
   const refresh = crypto.randomBytes(24).toString("base64url");
   await setRefreshToken(userId, refresh);
 
+  audit({ t: "join", roomId, userId });
+
   res.json({ token: access, refresh });
 });
 
@@ -146,6 +150,10 @@ app.post("/v1/rooms/:id/lock", requireBearer, requirePerm("room:lock"), async (r
   room.locked = true;
   await redis.set(roomKey(roomId), JSON.stringify(room));
   io.to(roomId).emit("roomLocked", { locked: true });
+  const auth = (req as any).auth as AuthPayload | undefined;
+  if (auth?.sub) {
+    audit({ t: "lock", roomId, userId: auth.sub, locked: true });
+  }
   res.json({ ok: true });
 });
 
@@ -157,12 +165,20 @@ app.post("/v1/rooms/:id/unlock", requireBearer, requirePerm("room:lock"), async 
   room.locked = false;
   await redis.set(roomKey(roomId), JSON.stringify(room));
   io.to(roomId).emit("roomLocked", { locked: false });
+  const auth = (req as any).auth as AuthPayload | undefined;
+  if (auth?.sub) {
+    audit({ t: "lock", roomId, userId: auth.sub, locked: false });
+  }
   res.json({ ok: true });
 });
 
 app.post("/v1/rooms/:id/muteAll", requireBearer, requirePerm("room:muteAll"), async (req, res) => {
   const roomId = req.params.id;
   io.to(roomId).emit("muteAll", {});
+  const auth = (req as any).auth as AuthPayload | undefined;
+  if (auth?.sub) {
+    audit({ t: "muteAll", roomId, userId: auth.sub });
+  }
   res.json({ ok: true });
 });
 
@@ -178,6 +194,10 @@ app.post("/v1/rooms/:id/remove", requireBearer, requirePerm("room:remove"), asyn
     .filter(([, uid]) => uid === targetUserId)
     .map(([sid]) => sid);
   targets.forEach((sid) => io.sockets.sockets.get(sid)?.emit("removedByHost", { reason: "removed" }));
+  const auth = (req as any).auth as AuthPayload | undefined;
+  if (auth?.sub) {
+    audit({ t: "remove", roomId, userId: auth.sub, target: targetUserId });
+  }
 
   res.json({ ok: true, count: targets.length });
 });
@@ -215,6 +235,8 @@ io.on("connection", async (socket) => {
   // Notify others
   socket.to(roomId).emit("participantJoined", { userId, socketId: socket.id });
 
+  audit({ t: "join", roomId, userId });
+
   await ensureRoomMode(roomId);
 
   // Heartbeat (optional)
@@ -251,6 +273,7 @@ io.on("connection", async (socket) => {
     await redis.hdel(socketsKey(roomId), socket.id);
     socket.leave(roomId);
     socket.to(roomId).emit("participantLeft", { userId, socketId: socket.id });
+    audit({ t: "leave", roomId, userId });
 
     // if no sockets for room, maybe cleanup members entry for user
     const userStillPresent = (await redis.hvals(socketsKey(roomId))).includes(userId);

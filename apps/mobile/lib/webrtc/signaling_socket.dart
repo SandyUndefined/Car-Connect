@@ -19,6 +19,9 @@ class SignalingSocket {
     required void Function(Map<String, dynamic>) onMute,
     required void Function(Map<String, dynamic>) onVideoToggle,
     required void Function(Map<String, dynamic>) onAudioLevel,
+    required void Function() onMuteAll,
+    required void Function(bool locked) onRoomLocked,
+    required void Function(String? reason) onRemovedByHost,
   }) {
     _socket = IO.io(baseUrl, {
       'transports': ['websocket'],
@@ -36,6 +39,19 @@ class SignalingSocket {
     _socket!.on('mute', (data) => onMute(Map<String, dynamic>.from(data)));
     _socket!.on('videoToggle', (data) => onVideoToggle(Map<String, dynamic>.from(data)));
     _socket!.on('audioLevel', (data) => onAudioLevel(Map<String, dynamic>.from(data)));
+    _socket!.on('muteAll', (_) => onMuteAll());
+    _socket!.on('roomLocked', (data) {
+      final map = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+      final locked = map['locked'] == true;
+      onRoomLocked(locked);
+    });
+    _socket!.on('removedByHost', (data) {
+      if (data is Map) {
+        onRemovedByHost(data['reason'] as String?);
+      } else {
+        onRemovedByHost(null);
+      }
+    });
 
     _socket!.connect();
   }

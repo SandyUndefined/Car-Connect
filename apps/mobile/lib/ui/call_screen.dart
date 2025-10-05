@@ -10,8 +10,10 @@ class CallScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final st = ref.watch(roomControllerProvider);
-    final sfuPeers = ref.watch(sfuControllerProvider);
+    final sfuState = ref.watch(sfuControllerProvider);
+    final sfuPeers = sfuState.peers;
     final ctrl = ref.read(roomControllerProvider.notifier);
+    final activeSpeaker = sfuState.activeSpeakerUserId;
 
     final tiles = <Widget>[];
     if (st.localRenderer != null) {
@@ -19,18 +21,21 @@ class CallScreen extends ConsumerWidget {
         label: "You",
         renderer: st.localRenderer!,
         mirror: true,
+        highlight: activeSpeaker != null && activeSpeaker == st.selfUserId,
       ));
     }
     for (final p in st.peers) {
       tiles.add(_VideoTile(
         label: p.userId,
         renderer: p.renderer,
+        highlight: activeSpeaker != null && activeSpeaker == p.userId,
       ));
     }
     for (final v in sfuPeers) {
       tiles.add(_VideoTile(
         label: v.userId,
         renderer: v.renderer,
+        highlight: activeSpeaker != null && activeSpeaker == v.userId,
       ));
     }
 
@@ -79,37 +84,61 @@ class _VideoTile extends StatelessWidget {
   final RTCVideoRenderer renderer;
   final bool mirror;
   final CallStats? stats;
-  const _VideoTile({required this.label, required this.renderer, this.stats, this.mirror = false, super.key});
+  final bool highlight;
+  const _VideoTile({
+    required this.label,
+    required this.renderer,
+    this.stats,
+    this.mirror = false,
+    this.highlight = false,
+    super.key,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        RTCVideoView(renderer, mirror: mirror, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain),
-        Positioned(
-          left: 12,
-          bottom: 12,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(label, style: const TextStyle(color: Colors.white)),
-                if (stats != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      _formatStats(stats!),
-                      style: const TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                  ),
-              ],
+    final borderColor = highlight ? Colors.greenAccent : Colors.transparent;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      margin: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        border: Border.all(color: borderColor, width: 4),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Stack(
+          children: [
+            RTCVideoView(
+              renderer,
+              mirror: mirror,
+              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
             ),
-          ),
+            Positioned(
+              left: 12,
+              bottom: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(label, style: const TextStyle(color: Colors.white)),
+                    if (stats != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          _formatStats(stats!),
+                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 

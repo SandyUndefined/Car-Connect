@@ -10,7 +10,18 @@ import * as mediasoup from "mediasoup";
 
 // ---- Env
 const PORT = Number(process.env.PORT || 9090);
-const JWT_SECRET = process.env.JWT_SECRET!;
+type Jwk = { kid: string; secret: string };
+const KEYSET: Jwk[] = JSON.parse(
+  process.env.JWT_KEYS || '[{"kid":"dev","secret":"dev-secret"}]',
+);
+const ACTIVE = KEYSET[0];
+
+function verifyToken(token: string) {
+  const decoded = jwt.decode(token, { complete: true }) as any;
+  const kid = decoded?.header?.kid;
+  const key = KEYSET.find((k) => k.kid === kid) || ACTIVE;
+  return jwt.verify(token, key.secret) as any;
+}
 const redis = new Redis(process.env.REDIS_URL);
 
 // ---- App
@@ -107,7 +118,7 @@ function ensureUser(roomId: RoomId, userId: UserId) {
 io.use((socket, next) => {
   try {
     const token = socket.handshake.auth?.token as string;
-    const payload = jwt.verify(token, JWT_SECRET) as any; // { roomId, userId, role, mode }
+    const payload = verifyToken(token); // { sub, roomId, role, perms }
     (socket as any).auth = payload;
     next();
   } catch (e) {

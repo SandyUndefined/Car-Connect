@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 typedef SignalHandler = void Function(Map<String, dynamic> payload);
@@ -44,6 +45,12 @@ class SignalingSocket {
   void emitVideoToggle(bool enabled) => _socket?.emit('videoToggle', {'enabled': enabled});
   void emitAudioLevel(num level) => _socket?.emit('audioLevel', {'level': level});
   void leaveRoom() => _socket?.emit('leaveRoom');
+
+  void onRoomMode(FutureOr<void> Function(Map<String, dynamic>) handler) {
+    _socket?.on('roomMode', (data) {
+      handler(Map<String, dynamic>.from(data));
+    });
+  }
 
   void dispose() {
     _socket?.dispose();

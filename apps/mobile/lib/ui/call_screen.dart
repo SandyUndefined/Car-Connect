@@ -1,19 +1,50 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../room/room_controller.dart';
 import '../room/sfu_controller.dart';
 
-class CallScreen extends ConsumerWidget {
+class CallScreen extends ConsumerStatefulWidget {
   const CallScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<CallScreen> createState() => _CallScreenState();
+}
+
+class _CallScreenState extends ConsumerState<CallScreen> {
+  @override
+  void initState() {
+    super.initState();
+    ref.listen<RoomState>(roomControllerProvider, (prev, next) {
+      final previous = prev?.removedByHostEventId ?? 0;
+      final current = next.removedByHostEventId;
+      if (current > previous) {
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          await ref.read(sfuControllerProvider.notifier).stop();
+          await ref.read(roomControllerProvider.notifier).leave();
+          if (!mounted) return;
+          final navigator = Navigator.of(context);
+          navigator.popUntil((route) => route.isFirst);
+          if (!mounted) return;
+          ScaffoldMessenger.of(navigator.context).showSnackBar(
+            const SnackBar(content: Text('You were removed by the host')),
+          );
+        });
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final st = ref.watch(roomControllerProvider);
     final sfuState = ref.watch(sfuControllerProvider);
     final sfuPeers = sfuState.peers;
     final ctrl = ref.read(roomControllerProvider.notifier);
     final activeSpeaker = sfuState.activeSpeakerUserId;
+    final role = _tokenRole(st.token);
+    final isHost = role == 'host';
 
     final tiles = <Widget>[];
     if (st.localRenderer != null) {
@@ -22,6 +53,7 @@ class CallScreen extends ConsumerWidget {
         renderer: st.localRenderer!,
         mirror: true,
         highlight: activeSpeaker != null && activeSpeaker == st.selfUserId,
+        isHost: isHost,
       ));
     }
     for (final p in st.peers) {
@@ -40,9 +72,45 @@ class CallScreen extends ConsumerWidget {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Mesh Call')),
+      appBar: AppBar(
+        title: const Text('Mesh Call'),
+        actions: [
+          if (isHost)
+            PopupMenuButton<_HostAction>(
+              onSelected: (action) => _onHostAction(action, ctrl, st.roomLocked),
+              itemBuilder: (context) => [
+                const PopupMenuItem<_HostAction>(
+                  value: _HostAction.muteAll,
+                  child: Text('Mute all'),
+                ),
+                PopupMenuItem<_HostAction>(
+                  value: _HostAction.toggleLock,
+                  child: Text(st.roomLocked ? 'Unlock room' : 'Lock room'),
+                ),
+              ],
+            ),
+        ],
+      ),
       body: Column(
         children: [
+          if (st.roomLocked)
+            Container(
+              width: double.infinity,
+              color: Colors.orange.shade700,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: const Row(
+                children: [
+                  Icon(Icons.lock, color: Colors.white),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Room is locked. New participants cannot join.',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Expanded(
             child: GridView.count(
               crossAxisCount: (tiles.length <= 2) ? 1 : 2,
@@ -77,7 +145,52 @@ class CallScreen extends ConsumerWidget {
       ),
     );
   }
+
+  Future<void> _onHostAction(_HostAction action, RoomController ctrl, bool isLocked) async {
+    try {
+      switch (action) {
+        case _HostAction.muteAll:
+          await ctrl.muteAllParticipants();
+          break;
+        case _HostAction.toggleLock:
+          if (isLocked) {
+            await ctrl.unlockRoom();
+          } else {
+            await ctrl.lockRoom();
+          }
+          break;
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Action failed: $e')),
+      );
+    }
+  }
+
+  String? _tokenRole(String? token) {
+    final payload = _decodeTokenPayload(token);
+    final role = payload?['role'];
+    return role is String ? role : null;
+  }
+
+  Map<String, dynamic>? _decodeTokenPayload(String? token) {
+    if (token == null) return null;
+    final parts = token.split('.');
+    if (parts.length < 2) return null;
+    try {
+      final normalized = base64Url.normalize(parts[1]);
+      final decoded = utf8.decode(base64Url.decode(normalized));
+      final dynamic payload = jsonDecode(decoded);
+      if (payload is Map<String, dynamic>) {
+        return payload;
+      }
+    } catch (_) {}
+    return null;
+  }
 }
+
+enum _HostAction { muteAll, toggleLock }
 
 class _VideoTile extends StatelessWidget {
   final String label;
@@ -85,12 +198,14 @@ class _VideoTile extends StatelessWidget {
   final bool mirror;
   final CallStats? stats;
   final bool highlight;
+  final bool isHost;
   const _VideoTile({
     required this.label,
     required this.renderer,
     this.stats,
     this.mirror = false,
     this.highlight = false,
+    this.isHost = false,
     super.key,
   });
 
@@ -123,7 +238,17 @@ class _VideoTile extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(label, style: const TextStyle(color: Colors.white)),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(label, style: const TextStyle(color: Colors.white)),
+                        if (isHost)
+                          const Padding(
+                            padding: EdgeInsets.only(left: 4),
+                            child: Icon(Icons.workspace_premium, color: Colors.amber, size: 16),
+                          ),
+                      ],
+                    ),
                     if (stats != null)
                       Padding(
                         padding: const EdgeInsets.only(top: 2),

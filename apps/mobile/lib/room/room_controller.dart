@@ -1,9 +1,10 @@
 import 'dart:async';
-import 'dart:convert';
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:uuid/uuid.dart';
 import '../api/signaling_rest.dart';
+import '../di.dart';
 import '../webrtc/signaling_socket.dart';
 import '../webrtc/rtc_manager.dart';
 import '../webrtc/peer.dart';
@@ -21,6 +22,8 @@ class RoomState {
   final RTCVideoRenderer? localRenderer;
   final Map<String, CallStats> stats;
   final String? selfUserId;
+  final bool roomLocked;
+  final int removedByHostEventId;
 
   RoomState({
     this.roomId,
@@ -31,6 +34,8 @@ class RoomState {
     this.localRenderer,
     this.stats = const {},
     this.selfUserId,
+    this.roomLocked = false,
+    this.removedByHostEventId = 0,
   });
 
   RoomState copyWith({
@@ -42,6 +47,8 @@ class RoomState {
     RTCVideoRenderer? localRenderer,
     Map<String, CallStats>? stats,
     String? selfUserId,
+    bool? roomLocked,
+    int? removedByHostEventId,
   }) => RoomState(
         roomId: roomId ?? this.roomId,
         token: token ?? this.token,
@@ -51,6 +58,8 @@ class RoomState {
         localRenderer: localRenderer ?? this.localRenderer,
         stats: stats ?? this.stats,
         selfUserId: selfUserId ?? this.selfUserId,
+        roomLocked: roomLocked ?? this.roomLocked,
+        removedByHostEventId: removedByHostEventId ?? this.removedByHostEventId,
       );
 }
 
@@ -118,6 +127,9 @@ class RoomController extends Notifier<RoomState> {
       onMute: (_) {},
       onVideoToggle: (_) {},
       onAudioLevel: (_) {},
+      onMuteAll: _onMuteAll,
+      onRoomLocked: _onRoomLocked,
+      onRemovedByHost: _onRemovedByHost,
     );
 
     _sock!.onRoomMode((data) async {
@@ -135,6 +147,53 @@ class RoomController extends Notifier<RoomState> {
     // For mesh: we will create pc per remote when we see participantJoined or when we want to call everyone.
     // Act as polite peer: wait for remote offer if they initiate; otherwise create offer to new remote.
     _startStatsTimer();
+  }
+
+  Future<void> muteAllParticipants() async {
+    final roomId = state.roomId;
+    final token = state.token;
+    if (roomId == null || token == null) return;
+    final dio = ref.read(dioProvider);
+    await dio.post(
+      '/v1/rooms/$roomId/muteAll',
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+  }
+
+  Future<void> lockRoom() async {
+    final roomId = state.roomId;
+    final token = state.token;
+    if (roomId == null || token == null) return;
+    final dio = ref.read(dioProvider);
+    await dio.post(
+      '/v1/rooms/$roomId/lock',
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+    state = state.copyWith(roomLocked: true);
+  }
+
+  Future<void> unlockRoom() async {
+    final roomId = state.roomId;
+    final token = state.token;
+    if (roomId == null || token == null) return;
+    final dio = ref.read(dioProvider);
+    await dio.post(
+      '/v1/rooms/$roomId/unlock',
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+    state = state.copyWith(roomLocked: false);
+  }
+
+  Future<void> removeParticipant(String targetUserId) async {
+    final roomId = state.roomId;
+    final token = state.token;
+    if (roomId == null || token == null) return;
+    final dio = ref.read(dioProvider);
+    await dio.post(
+      '/v1/rooms/$roomId/remove',
+      data: {'targetUserId': targetUserId},
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
   }
 
   Future<Peer> _createPeer(String remoteUserId, String remoteSocketId, List<Map<String, dynamic>> ice) async {
@@ -478,6 +537,19 @@ class RoomController extends Notifier<RoomState> {
 
   void _clearSnapshotsForPeer(String socketId) {
     _previousBitrates.removeWhere((key, _) => key.startsWith('$socketId:'));
+  }
+
+  void _onMuteAll() {
+    _rtc.localStream?.getAudioTracks().forEach((t) => t.enabled = false);
+    state = state.copyWith(micOn: false);
+  }
+
+  void _onRoomLocked(bool locked) {
+    state = state.copyWith(roomLocked: locked);
+  }
+
+  void _onRemovedByHost(String? _) {
+    state = state.copyWith(removedByHostEventId: state.removedByHostEventId + 1);
   }
 
   @override

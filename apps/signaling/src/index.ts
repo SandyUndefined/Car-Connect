@@ -5,6 +5,7 @@ import http from "http";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import slowDown from "slow-down";
 import { Server } from "socket.io";
 import { StatusCodes } from "http-status-codes";
 import { requireBearer, requirePerm, signToken, verifyToken } from "./auth.js";
@@ -25,6 +26,7 @@ async function checkRefreshToken(userId: string, token: string) {
 const app = express();
 app.use(helmet());
 app.use(rateLimit({ windowMs: 60_000, max: 300 }));
+app.use(slowDown({ windowMs: 60_000, delayAfter: 200, delayMs: 10 }));
 app.use(cors());
 app.use(express.json());
 
@@ -32,6 +34,21 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 io.engine.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
+  next();
+});
+
+// Socket connection limit per IP (very simple)
+const ipConn: Record<string, number> = {};
+io.engine.on("connection", (raw) => {
+  const ip = ((raw as any).request.socket.remoteAddress as string | undefined) || "unknown";
+  ipConn[ip] = (ipConn[ip] || 0) + 1;
+  raw.on("close", () => {
+    ipConn[ip] = Math.max(0, (ipConn[ip] || 1) - 1);
+  });
+});
+io.use((socket, next) => {
+  const ip = ((socket.request.socket as any).remoteAddress as string | undefined) || "unknown";
+  if ((ipConn[ip] || 0) > 20) return next(new Error("too many connections from IP"));
   next();
 });
 

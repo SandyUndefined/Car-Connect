@@ -14,6 +14,7 @@ import { requireBearer, requirePerm, signToken, verifyToken } from "./auth.js";
 import type { AuthPayload } from "./auth.js";
 import { ROLE_PERMS } from "./roles.js";
 import { redis, roomKey, membersKey, socketsKey } from "./redis.js";
+import { setRoomKey, getRoomKey } from "./e2ee.js";
 import type { Room } from "./models.js";
 import { getTurnCredentials } from "./turn.js";
 import { audit } from "./audit.js";
@@ -141,6 +142,20 @@ app.post("/v1/rooms/:id/join", async (req, res) => {
   audit({ t: "join", roomId, userId });
 
   res.json({ token: access, refresh });
+});
+
+app.post("/v1/rooms/:id/e2ee/set", requireBearer, requirePerm("room:lock"), async (req, res) => {
+  const { keyB64 } = req.body ?? {};
+  if (!keyB64) return res.status(StatusCodes.BAD_REQUEST).json({ error: "keyB64 required" });
+  await setRoomKey(req.params.id, keyB64);
+  io.to(req.params.id).emit("e2eeEnabled", {});
+  res.json({ ok: true });
+});
+
+app.get("/v1/rooms/:id/e2ee/key", requireBearer, requirePerm("room:read"), async (req, res) => {
+  const key = await getRoomKey(req.params.id);
+  if (!key) return res.status(StatusCodes.NOT_FOUND).json({ error: "no key" });
+  res.json({ keyB64: key });
 });
 
 app.post("/auth/refresh", async (req, res) => {

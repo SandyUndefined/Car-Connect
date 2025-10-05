@@ -23,6 +23,7 @@ const io = new Server(server, { cors: { origin: "*" } });
 // ---- Mediasoup worker & router
 let worker: mediasoup.types.Worker;
 let router: mediasoup.types.Router;
+let audioLevelObserver: mediasoup.types.AudioLevelObserver;
 
 async function createWorker() {
   worker = await mediasoup.createWorker({
@@ -41,6 +42,12 @@ async function createWorker() {
       // You can add H264/VP9/AV1 later
     ],
   });
+
+  audioLevelObserver = await router.createAudioLevelObserver({
+    interval: 800,
+    threshold: -70,
+    maxEntries: 1,
+  });
 }
 await createWorker();
 
@@ -58,9 +65,34 @@ type PerUser = {
 };
 
 const rooms = new Map<RoomId, Map<UserId, PerUser>>();
+const audioProducerRooms = new Map<string, { roomId: RoomId; userId: UserId }>();
+const roomActiveSpeaker = new Map<RoomId, { userId?: UserId }>();
+
+audioLevelObserver.on("volumes", (volumes) => {
+  if (!volumes.length) return;
+  const sorted = [...volumes].sort((a, b) => b.volume - a.volume);
+  const { producer } = sorted[0];
+  const info = audioProducerRooms.get(producer.id);
+  if (!info) return;
+  roomActiveSpeaker.set(info.roomId, { userId: info.userId });
+});
+
+audioLevelObserver.on("silence", () => {
+  for (const roomId of roomActiveSpeaker.keys()) {
+    roomActiveSpeaker.set(roomId, { userId: undefined });
+  }
+});
+
+setInterval(() => {
+  for (const [roomId] of rooms) {
+    const active = roomActiveSpeaker.get(roomId)?.userId ?? null;
+    io.to(roomId).emit("sfu.activeSpeaker", { userId: active });
+  }
+}, 1000);
 
 function ensureRoom(roomId: RoomId) {
   if (!rooms.has(roomId)) rooms.set(roomId, new Map());
+  if (!roomActiveSpeaker.has(roomId)) roomActiveSpeaker.set(roomId, { userId: undefined });
   return rooms.get(roomId)!;
 }
 
@@ -135,14 +167,29 @@ io.on("connection", (socket) => {
   socket.on("sfu.produce", async ({ kind, rtpParameters }, cb) => {
     const user = ensureUser(roomId, userId);
     const transport = user.transports.send!;
-    const producer = await transport.produce({ kind, rtpParameters, appData: { userId } });
+    const producer = await transport.produce({ kind, rtpParameters, appData: { userId, roomId } });
     if (kind === "audio") user.producers.audio = producer;
     if (kind === "video") user.producers.video = producer;
+
+    if (kind === "audio") {
+      audioProducerRooms.set(producer.id, { roomId, userId });
+      try {
+        await audioLevelObserver.addProducer({ producerId: producer.id });
+      } catch (err) {
+        console.warn("failed to add producer to audio observer", err);
+      }
+    }
 
     // notify others to consume
     socket.to(roomId).emit("sfu.newProducer", { userId, producerId: producer.id, kind });
 
     producer.on("transportclose", () => producer.close());
+    producer.on("close", () => {
+      if (kind === "audio") {
+        audioProducerRooms.delete(producer.id);
+        audioLevelObserver.removeProducer({ producerId: producer.id }).catch(() => {});
+      }
+    });
     cb({ id: producer.id });
   });
 
@@ -178,7 +225,13 @@ io.on("connection", (socket) => {
     user.transports.send?.close();
     user.transports.recv?.close();
     roomMap.delete(userId);
-    if (roomMap.size === 0) rooms.delete(roomId);
+    if (roomMap.size === 0) {
+      rooms.delete(roomId);
+      roomActiveSpeaker.set(roomId, { userId: undefined });
+    } else {
+      const anyAudio = Array.from(roomMap.values()).some((p) => p.producers.audio);
+      if (!anyAudio) roomActiveSpeaker.set(roomId, { userId: undefined });
+    }
   });
 });
 

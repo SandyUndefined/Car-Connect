@@ -14,9 +14,22 @@ class SfuPeerView {
   Future<void> dispose() async => renderer.dispose();
 }
 
-final sfuControllerProvider = NotifierProvider<SfuController, List<SfuPeerView>>(SfuController.new);
+class SfuState {
+  final List<SfuPeerView> peers;
+  final String? activeSpeakerUserId;
 
-class SfuController extends Notifier<List<SfuPeerView>> {
+  const SfuState({this.peers = const [], this.activeSpeakerUserId});
+
+  SfuState copyWith({List<SfuPeerView>? peers, String? Function()? activeSpeakerUserId}) => SfuState(
+        peers: peers ?? this.peers,
+        activeSpeakerUserId:
+            activeSpeakerUserId != null ? activeSpeakerUserId() : this.activeSpeakerUserId,
+      );
+}
+
+final sfuControllerProvider = NotifierProvider<SfuController, SfuState>(SfuController.new);
+
+class SfuController extends Notifier<SfuState> {
   final _rtc = RtcManager();
   SfuClient? _sfu;
   RTCPeerConnection? _sendPc;
@@ -24,9 +37,12 @@ class SfuController extends Notifier<List<SfuPeerView>> {
   RTCRtpSender? _videoSender;
   List<Map<String, dynamic>> _ice = [];
   String? _token;
+  final List<_PendingVideoProducer> _pendingVideoProducers = [];
+  int? _pendingMaxBitrate;
+  int? _appliedMaxBitrate;
 
   @override
-  List<SfuPeerView> build() => [];
+  SfuState build() => const SfuState();
 
   Future<void> start(String token) async {
     _token = token;
@@ -52,7 +68,12 @@ class SfuController extends Notifier<List<SfuPeerView>> {
     final local = await _rtc.ensureLocal(video: true, audio: true);
     for (final t in local.getTracks()) {
       final sender = await _sendPc!.addTrack(t, local);
-      if (t.kind == 'video') _videoSender = sender;
+      if (t.kind == 'video') {
+        _videoSender = sender;
+        if (_pendingMaxBitrate != null) {
+          await _applyVideoMaxBitrate(_pendingMaxBitrate);
+        }
+      }
     }
 
     // ICE candidates from PC → ignored (mediasoup uses DTLS/ICE via connectTransport)
@@ -85,7 +106,13 @@ class SfuController extends Notifier<List<SfuPeerView>> {
 
     // Listen for new producers to consume:
     _sfu!.on("sfu.newProducer", (data) async {
-      final producerId = data["producerId"];
+      final map = Map<String, dynamic>.from(data);
+      final producerId = map["producerId"] as String;
+      final kind = map["kind"] as String?;
+      final userId = map["userId"] as String? ?? "unknown";
+      if (kind == 'video') {
+        _pendingVideoProducers.add(_PendingVideoProducer(producerId: producerId, userId: userId));
+      }
       final resp = await _emitAck("sfu.consume", {
         "producerId": producerId,
         "rtpCapabilities": rtpCaps
@@ -93,13 +120,23 @@ class SfuController extends Notifier<List<SfuPeerView>> {
       // Set remote description if needed; with Flutter we bind track via onTrack
     });
 
+    _sfu!.on("sfu.activeSpeaker", (data) {
+      final map = Map<String, dynamic>.from(data ?? {});
+      final userId = map["userId"] as String?;
+      state = state.copyWith(activeSpeakerUserId: () => userId);
+    });
+
     // Hook remote tracks
     _recvPc!.onTrack = (RTCTrackEvent e) async {
       if (e.streams.isEmpty) return;
-      final v = SfuPeerView(userId: "unknown", producerId: "p");
+      if (e.track.kind != 'video') return;
+      final pending = _pendingVideoProducers.isNotEmpty
+          ? _pendingVideoProducers.removeAt(0)
+          : _PendingVideoProducer(producerId: 'unknown', userId: 'unknown');
+      final v = SfuPeerView(userId: pending.userId, producerId: pending.producerId);
       await v.renderer.initialize();
       v.renderer.srcObject = e.streams.first;
-      state = [...state, v];
+      state = state.copyWith(peers: [...state.peers, v]);
     };
   }
 
@@ -119,12 +156,40 @@ class SfuController extends Notifier<List<SfuPeerView>> {
   }
 
   Future<void> stop() async {
-    for (final v in state) { await v.dispose(); }
-    state = [];
+    for (final v in state.peers) { await v.dispose(); }
+    state = const SfuState();
     try { await _sendPc?.close(); } catch (_) {}
     try { await _recvPc?.close(); } catch (_) {}
     _sendPc = null; _recvPc = null; _videoSender = null;
     _sfu?.dispose(); _sfu = null;
     await _rtc.dispose();
+    _pendingVideoProducers.clear();
+    _appliedMaxBitrate = null;
   }
+
+  Future<void> updateVideoMaxBitrate(int? maxBitrateBps) async {
+    _pendingMaxBitrate = maxBitrateBps;
+    await _applyVideoMaxBitrate(maxBitrateBps);
+  }
+
+  Future<void> _applyVideoMaxBitrate(int? maxBitrateBps) async {
+    final sender = _videoSender;
+    if (sender == null) return;
+    if (_appliedMaxBitrate == maxBitrateBps) return;
+    final params = await sender.getParameters();
+    final encodings = params.encodings;
+    if (encodings == null || encodings.isEmpty) return;
+    for (final encoding in encodings) {
+      encoding.maxBitrate = maxBitrateBps;
+    }
+    await sender.setParameters(params);
+    _appliedMaxBitrate = maxBitrateBps;
+  }
+}
+
+class _PendingVideoProducer {
+  final String producerId;
+  final String userId;
+
+  _PendingVideoProducer({required this.producerId, required this.userId});
 }

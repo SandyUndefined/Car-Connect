@@ -20,6 +20,7 @@ class RoomState {
   final List<Peer> peers; // remote peers
   final RTCVideoRenderer? localRenderer;
   final Map<String, CallStats> stats;
+  final String? selfUserId;
 
   RoomState({
     this.roomId,
@@ -29,6 +30,7 @@ class RoomState {
     this.peers = const [],
     this.localRenderer,
     this.stats = const {},
+    this.selfUserId,
   });
 
   RoomState copyWith({
@@ -39,6 +41,7 @@ class RoomState {
     List<Peer>? peers,
     RTCVideoRenderer? localRenderer,
     Map<String, CallStats>? stats,
+    String? selfUserId,
   }) => RoomState(
         roomId: roomId ?? this.roomId,
         token: token ?? this.token,
@@ -47,6 +50,7 @@ class RoomState {
         peers: peers ?? this.peers,
         localRenderer: localRenderer ?? this.localRenderer,
         stats: stats ?? this.stats,
+        selfUserId: selfUserId ?? this.selfUserId,
       );
 }
 
@@ -76,7 +80,7 @@ class RoomController extends Notifier<RoomState> {
   @override
   RoomState build() {
     _rest = SignalingRest(ref.read(dioProvider));
-    return RoomState();
+    return RoomState(selfUserId: _selfId);
   }
 
   Future<void> createRoom() async {
@@ -468,7 +472,7 @@ class RoomController extends Notifier<RoomState> {
         localRenderer: preserveLocalMedia ? state.localRenderer : null,
       );
     } else {
-      state = RoomState();
+      state = RoomState(selfUserId: _selfId);
     }
   }
 

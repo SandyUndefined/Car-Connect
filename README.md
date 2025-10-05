@@ -57,6 +57,15 @@ flutter run -d <your_device>  # ensure signalingBase points to your machine IP
 - Running on an Android emulator? Use `10.0.2.2` instead of `localhost` when you need to hit services running on the host machine.
 - Testing on a physical iOS device connected to your LAN? Point `SIGNALING_BASE` to your Mac's LAN IP address so the phone can reach the signaling server.
 
+## Security
+
+- Access tokens are short lived (1 hour) with refresh tokens valid for 7 days, both stored in Redis for revocation.
+- Socket authentication relies on JWTs and enforces role/permission checks on every action.
+- Production deployments must terminate TLS; only HTTPS/WSS traffic is accepted.
+- TURN uses shared-secret authentication to issue time-limited credentials.
+- Optional end-to-end encryption can be toggled per room by the host, exchanging room keys and enabling frame-level encryption when supported.
+- Rotate signing keys by prepending new entries to `JWT_KEYS`, redeploying, then removing old keys after clients refresh.
+
 ## Production Notes
 
 - **JWT lifetime:** In production deployments the signaling service now defaults to a five-minute JWT and reports the TTL in room create/join responses. Clients should request a fresh token whenever they reconnect so expired credentials do not block access.

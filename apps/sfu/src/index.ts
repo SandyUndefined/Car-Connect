@@ -25,6 +25,7 @@ let worker: mediasoup.types.Worker;
 let router: mediasoup.types.Router;
 let audioLevelObserver: mediasoup.types.AudioLevelObserver;
 
+// TODO: spawn one worker per CPU core and shard rooms across workers when scaling.
 async function createWorker() {
   worker = await mediasoup.createWorker({
     rtcMinPort: 40000,

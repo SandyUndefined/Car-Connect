@@ -7,8 +7,15 @@ export interface AuthPayload {
   userId?: string;
 }
 
-export function signToken(payload: AuthPayload, ttl = "2h") {
+const DEFAULT_TOKEN_TTL =
+  process.env.JWT_TTL || (process.env.NODE_ENV === "production" ? "5m" : "12h");
+
+export function signToken(payload: AuthPayload, ttl = DEFAULT_TOKEN_TTL) {
   return jwt.sign(payload, process.env.JWT_SECRET!, { expiresIn: ttl });
+}
+
+export function getDefaultTokenTtl() {
+  return DEFAULT_TOKEN_TTL;
 }
 
 export function verifyToken<T = AuthPayload>(token: string): T {

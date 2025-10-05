@@ -56,3 +56,10 @@ flutter run -d <your_device>  # ensure signalingBase points to your machine IP
 - WebRTC Offer/Answer not taking effect? Confirm that the signaling payload uses the same `signal` keys on both the sender and receiver so the SDP is properly applied.
 - Running on an Android emulator? Use `10.0.2.2` instead of `localhost` when you need to hit services running on the host machine.
 - Testing on a physical iOS device connected to your LAN? Point `SIGNALING_BASE` to your Mac's LAN IP address so the phone can reach the signaling server.
+
+## Production Notes
+
+- **JWT lifetime:** In production deployments the signaling service now defaults to a five-minute JWT and reports the TTL in room create/join responses. Clients should request a fresh token whenever they reconnect so expired credentials do not block access.
+- **Mediasoup scaling:** The SFU currently runs with a single mediasoup worker; plan to spawn one worker per CPU core and route rooms to workers when scaling horizontally.
+- **TURN usage:** Keep coturn online even with the SFU in place—publishers behind restrictive NAT or firewall rules still need relayed candidates to reach the SFU.
+- **Media extensions:** Treat call recording, PSTN dial-out, or SIP bridging as their own microservices that attach to the signaling layer instead of bolting them onto the SFU process.

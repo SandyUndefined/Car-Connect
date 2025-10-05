@@ -7,7 +7,7 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { Server } from "socket.io";
 import { StatusCodes } from "http-status-codes";
-import { requireBearer, signToken } from "./auth.js";
+import { getDefaultTokenTtl, requireBearer, signToken } from "./auth.js";
 import { redis, roomKey, membersKey, socketsKey } from "./redis.js";
 import type { Room } from "./models.js";
 import { getTurnCredentials } from "./turn.js";
@@ -65,11 +65,8 @@ app.post("/v1/rooms", async (req, res) => {
   await redis.del(membersKey(id));
   await redis.del(socketsKey(id));
 
-  const token = signToken(
-    { roomId: id, role: "host", userId: hostId, mode: room.mode },
-    "6h",
-  );
-  res.json({ room, token });
+  const token = signToken({ roomId: id, role: "host", userId: hostId, mode: room.mode });
+  res.json({ room, token, ttl: getDefaultTokenTtl() });
 });
 
 // Join room (returns JWT)
@@ -82,11 +79,8 @@ app.post("/v1/rooms/:id/join", async (req, res) => {
   if (!raw) return res.status(StatusCodes.NOT_FOUND).json({ error: "room not found" });
 
   const room = JSON.parse(raw) as Room;
-  const token = signToken(
-    { roomId, role: "participant", userId, mode: room.mode },
-    "6h",
-  );
-  res.json({ token });
+  const token = signToken({ roomId, role: "participant", userId, mode: room.mode });
+  res.json({ token, ttl: getDefaultTokenTtl() });
 });
 
 // Protected: room details (debug)

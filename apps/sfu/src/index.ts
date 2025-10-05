@@ -24,6 +24,7 @@ const io = new Server(server, { cors: { origin: "*" } });
 let worker: mediasoup.types.Worker;
 let router: mediasoup.types.Router;
 
+// TODO: spawn one worker per CPU core and shard rooms across workers when scaling.
 async function createWorker() {
   worker = await mediasoup.createWorker({
     rtcMinPort: 40000,

@@ -65,7 +65,10 @@ app.post("/v1/rooms", async (req, res) => {
   await redis.del(membersKey(id));
   await redis.del(socketsKey(id));
 
-  const token = signToken({ roomId: id, role: "host", userId: hostId }, "6h");
+  const token = signToken(
+    { roomId: id, role: "host", userId: hostId, mode: room.mode },
+    "6h",
+  );
   res.json({ room, token });
 });
 
@@ -78,7 +81,11 @@ app.post("/v1/rooms/:id/join", async (req, res) => {
   const raw = await redis.get(roomKey(roomId));
   if (!raw) return res.status(StatusCodes.NOT_FOUND).json({ error: "room not found" });
 
-  const token = signToken({ roomId, role: "participant", userId }, "6h");
+  const room = JSON.parse(raw) as Room;
+  const token = signToken(
+    { roomId, role: "participant", userId, mode: room.mode },
+    "6h",
+  );
   res.json({ token });
 });
 

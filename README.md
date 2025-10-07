@@ -26,28 +26,23 @@ Each directory currently contains placeholder files and can be expanded with app
 
 ## Local Dev
 
-### Terminal A: Infra
+The monorepo is orchestrated with pnpm workspaces. Install dependencies once from the
+repository root:
 
 ```bash
-pnpm dev:stack    # starts redis + coturn
+pnpm install
 ```
 
-### Terminal B: Signaling API
+Key scripts available at the root level:
 
-```bash
-cp apps/signaling/.env.example apps/signaling/.env
-pnpm dev:signaling
-```
+- `pnpm dev:stack` &mdash; spins up Redis and coturn via `infra/docker-compose.yml`.
+- `pnpm dev:signaling` &mdash; runs the Socket.IO signaling API in watch mode.
+- `pnpm dev:sfu` &mdash; starts the mediasoup-based SFU service.
+- `pnpm dev:admin` &mdash; launches the Next.js admin dashboard.
+- `pnpm dev` &mdash; runs all available dev scripts in parallel (when your machine can handle it).
 
-### Terminal C: Flutter Mobile (run emulator or real device)
-
-```bash
-cd apps/mobile
-flutter pub get
-flutter run -d <your_device>  # ensure signalingBase points to your machine IP
-```
-
-> **Note:** On-device testing requires replacing `http://localhost:8080` with your host LAN IP in `Env.signalingBase`, or passing `--dart-define=SIGNALING_BASE="http://<LAN_IP>:8080"` when launching the Flutter app.
+Detailed, step-by-step instructions for each application (including environment
+variable setup and verification commands) live in [`apps/README.md`](apps/README.md).
 
 ## Troubleshooting
 

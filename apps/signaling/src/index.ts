@@ -7,7 +7,7 @@ import https from "https";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import slowDown from "slow-down";
+import slowDown from "express-slow-down";
 import { Server } from "socket.io";
 import { StatusCodes } from "http-status-codes";
 import { requireBearer, requirePerm, signToken, verifyToken } from "./auth.js";
@@ -249,6 +249,10 @@ app.post("/v1/rooms/:id/remove", requireBearer, requirePerm("room:remove"), asyn
 // Socket.IO signaling events
 io.use((socket, next) => {
   try {
+    const token =
+      (socket.handshake.auth && (socket.handshake.auth as any).token) ||
+      (socket.handshake.query && (socket.handshake.query as any).token);
+    if (!token) return next(new Error("missing token"));
     const payload = verifyToken<{
       roomId: string;
       role: "host" | "participant";

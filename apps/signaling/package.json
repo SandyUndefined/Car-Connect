@@ -19,7 +19,7 @@
     "http-status-codes": "^2.3.0",
     "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",
-    "slow-down": "^0.3.2",
+    "express-slow-down": "^1.4.0",
     "socket.io": "^4.7.5",
     "zod": "^3.23.8",
     "@proto/shared": "workspace:*"
@@ -27,8 +27,8 @@
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
-    "@types/express-rate-limit": "^5.1.5",
-    "@types/helmet": "^6.0.1",
+    "@types/express-rate-limit": "^6.0.2",
+    "@types/helmet": "^4.0.0",
     "@types/jsonwebtoken": "^9.0.6",
     "@types/node": "^20.14.12",
     "node-fetch": "^3.3.2",

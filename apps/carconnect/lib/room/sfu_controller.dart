@@ -5,6 +5,7 @@ import '../sfu/sfu_client.dart';
 import '../api/signaling_rest.dart';
 import '../webrtc/rtc_manager.dart';
 import '../env.dart';
+import '../di.dart';
 
 class SfuPeerView {
   final String userId;
@@ -176,14 +177,35 @@ class SfuController extends Notifier<SfuState> {
     final sender = _videoSender;
     if (sender == null) return;
     if (_appliedMaxBitrate == maxBitrateBps) return;
-    final params = await sender.getParameters();
+    final params = await _getSenderParameters(sender);
+    if (params == null) {
+      _appliedMaxBitrate = maxBitrateBps;
+      return;
+    }
     final encodings = params.encodings;
-    if (encodings == null || encodings.isEmpty) return;
+    if (encodings == null || encodings.isEmpty) {
+      _appliedMaxBitrate = maxBitrateBps;
+      return;
+    }
     for (final encoding in encodings) {
       encoding.maxBitrate = maxBitrateBps;
     }
     await sender.setParameters(params);
     _appliedMaxBitrate = maxBitrateBps;
+  }
+
+  Future<RTCRtpParameters?> _getSenderParameters(RTCRtpSender sender) async {
+    try {
+      final dynamic dynamicSender = sender;
+      // ignore: avoid_dynamic_calls
+      final dynamic params = await dynamicSender.getParameters();
+      if (params is RTCRtpParameters) {
+        return params;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 }
 

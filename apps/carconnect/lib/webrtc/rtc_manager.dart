@@ -3,7 +3,6 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 class RtcManager {
   MediaStream? localStream;
-  final Map<String, PeerConnectionState> _pcStates = {};
 
   Future<RTCPeerConnection> createPeerConnectionWithConfig(List<Map<String, dynamic>> iceServers) async {
     final Map<String, dynamic> config = {
@@ -35,21 +34,40 @@ class RtcManager {
 
   // Try enabling simulcast on the video sender (best-effort)
   Future<void> tryEnableSimulcast(RTCRtpSender sender) async {
-    final params = await sender.getParameters();
+    final params = await _getSenderParameters(sender);
+    if (params == null) return;
     final encodings = params.encodings;
-    if (encodings == null || encodings.isEmpty) {
-      params.encodings = [
-        RTCRtpEncoding(rid: 'f', maxBitrate: 1_500_000, numTemporalLayers: 2),
-        RTCRtpEncoding(rid: 'h', maxBitrate: 800_000, scaleResolutionDownBy: 2, numTemporalLayers: 2),
-        RTCRtpEncoding(rid: 'q', maxBitrate: 250_000, scaleResolutionDownBy: 4, numTemporalLayers: 2),
-      ];
-      await sender.setParameters(params);
-    }
+    if (encodings != null && encodings.isNotEmpty) return;
+    params.encodings = [
+      RTCRtpEncoding(rid: 'f', maxBitrate: 1500000, numTemporalLayers: 2),
+      RTCRtpEncoding(rid: 'h', maxBitrate: 800000, scaleResolutionDownBy: 2, numTemporalLayers: 2),
+      RTCRtpEncoding(rid: 'q', maxBitrate: 250000, scaleResolutionDownBy: 4, numTemporalLayers: 2),
+    ];
+    await sender.setParameters(params);
   }
 
   Future<void> dispose() async {
-    try { await localStream?.getTracks().forEach((t) => t.stop()); } catch (_) {}
+    final tracks = localStream?.getTracks() ?? const <MediaStreamTrack>[];
+    for (final track in tracks) {
+      try {
+        await Future.sync(track.stop);
+      } catch (_) {}
+    }
     try { await localStream?.dispose(); } catch (_) {}
     localStream = null;
+  }
+
+  Future<RTCRtpParameters?> _getSenderParameters(RTCRtpSender sender) async {
+    try {
+      final dynamic dynamicSender = sender;
+      // ignore: avoid_dynamic_calls
+      final dynamic params = await dynamicSender.getParameters();
+      if (params is RTCRtpParameters) {
+        return params;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 }

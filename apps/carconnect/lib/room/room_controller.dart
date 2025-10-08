@@ -89,6 +89,10 @@ class RoomController extends Notifier<RoomState> {
   @override
   RoomState build() {
     _rest = SignalingRest(ref.read(dioProvider));
+    ref.onDispose(() {
+      _statsTimer?.cancel();
+      _statsTimer = null;
+    });
     return RoomState(selfUserId: _selfId);
   }
 
@@ -298,7 +302,9 @@ class RoomController extends Notifier<RoomState> {
       final List<double> lossValues = [];
 
       for (final report in reports) {
-        switch (report.type) {
+        final type = _reportType(report);
+        if (type == null) continue;
+        switch (type) {
           case 'outbound-rtp':
             final bitrate = _bitrateForReport(peer.socketId, report, 'bytesSent');
             if (bitrate != null) {
@@ -349,11 +355,13 @@ class RoomController extends Notifier<RoomState> {
     }
   }
 
-  double? _bitrateForReport(String socketId, RTCStatsReport report, String bytesKey) {
-    final bytes = _numFromDynamic(report.values[bytesKey]);
+  double? _bitrateForReport(String socketId, dynamic report, String bytesKey) {
+    final values = _reportValues(report);
+    final bytes = values == null ? null : _numFromDynamic(values[bytesKey]);
     final timestamp = _timestampFromReport(report);
-    if (bytes == null || timestamp == null) return null;
-    final key = '$socketId:${report.id}:$bytesKey';
+    final reportId = _reportId(report);
+    if (bytes == null || timestamp == null || reportId == null) return null;
+    final key = '$socketId:$reportId:$bytesKey';
     final snapshot = _previousBitrates[key];
     _previousBitrates[key] = _BitrateSnapshot(bytes, timestamp);
     if (snapshot == null) return null;
@@ -364,40 +372,48 @@ class RoomController extends Notifier<RoomState> {
     return bitsPerSecond / 1000; // kbps
   }
 
-  double? _rttForReport(RTCStatsReport report) {
-    final stateValue = report.values['state'];
+  double? _rttForReport(dynamic report) {
+    final values = _reportValues(report);
+    if (values == null) return null;
+    final stateValue = values['state'];
     if (stateValue != 'succeeded') return null;
-    final rttSeconds = _numFromDynamic(report.values['currentRoundTripTime']);
+    final rttSeconds = _numFromDynamic(values['currentRoundTripTime']);
     if (rttSeconds == null) return null;
     return rttSeconds * 1000;
   }
 
-  double? _rttFromRemoteInbound(RTCStatsReport report) {
-    final rttSeconds = _numFromDynamic(report.values['roundTripTime']);
+  double? _rttFromRemoteInbound(dynamic report) {
+    final values = _reportValues(report);
+    if (values == null) return null;
+    final rttSeconds = _numFromDynamic(values['roundTripTime']);
     if (rttSeconds == null) return null;
     return rttSeconds * 1000;
   }
 
-  double? _lossForReport(RTCStatsReport report) {
-    final lost = _numFromDynamic(report.values['packetsLost']);
-    final received = _numFromDynamic(report.values['packetsReceived']);
+  double? _lossForReport(dynamic report) {
+    final values = _reportValues(report);
+    if (values == null) return null;
+    final lost = _numFromDynamic(values['packetsLost']);
+    final received = _numFromDynamic(values['packetsReceived']);
     if (lost == null || received == null) return null;
     final total = lost + received;
     if (total <= 0) return null;
     return (lost / total) * 100;
   }
 
-  double? _lossForRemoteInbound(RTCStatsReport report) {
-    final lost = _numFromDynamic(report.values['packetsLost']);
-    final sent = _numFromDynamic(report.values['packetsSent']);
+  double? _lossForRemoteInbound(dynamic report) {
+    final values = _reportValues(report);
+    if (values == null) return null;
+    final lost = _numFromDynamic(values['packetsLost']);
+    final sent = _numFromDynamic(values['packetsSent']);
     if (lost == null || sent == null) return null;
     final total = lost + sent;
     if (total <= 0) return null;
     return (lost / total) * 100;
   }
 
-  double? _timestampFromReport(RTCStatsReport report) {
-    final timestamp = report.timestamp;
+  double? _timestampFromReport(dynamic report) {
+    final timestamp = _reportTimestamp(report);
     if (timestamp is num) {
       return timestamp.toDouble();
     }
@@ -411,6 +427,62 @@ class RoomController extends Notifier<RoomState> {
     if (value is num) return value.toDouble();
     if (value is String) return double.tryParse(value);
     return null;
+  }
+
+  String? _reportType(dynamic report) {
+    if (report is Map) {
+      final type = report['type'];
+      return type is String ? type : type?.toString();
+    }
+    try {
+      final dynamic type = report.type;
+      if (type is String) return type;
+      return type?.toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? _reportId(dynamic report) {
+    if (report is Map) {
+      final id = report['id'];
+      return id is String ? id : id?.toString();
+    }
+    try {
+      final dynamic id = report.id;
+      if (id is String) return id;
+      return id?.toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Map<String, dynamic>? _reportValues(dynamic report) {
+    dynamic values;
+    if (report is Map) {
+      values = report['values'];
+    } else {
+      try {
+        values = report.values;
+      } catch (_) {
+        values = null;
+      }
+    }
+    if (values is Map) {
+      return values.map((key, value) => MapEntry(key.toString(), value));
+    }
+    return null;
+  }
+
+  dynamic _reportTimestamp(dynamic report) {
+    if (report is Map) {
+      return report['timestamp'];
+    }
+    try {
+      return report.timestamp;
+    } catch (_) {
+      return null;
+    }
   }
 
   bool _mapsEqual(Map<String, CallStats> a, Map<String, CallStats> b) {
